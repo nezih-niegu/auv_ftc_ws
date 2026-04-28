@@ -1,0 +1,29 @@
+auv_controller:
+  ros__parameters:
+    control_rate_hz:    50.0
+    thrust_max:          50.0     # N (per actuator channel)
+    thrust_min:         -50.0
+    buoyancy_force:     247.6     # mass*g*1.01 for 25 kg
+    metacentric_height:   0.05    # m, GM positive = self-righting
+
+    # Outer loop (position -> velocity reference) gains
+    kp_surge:             0.6
+    kp_heave:             0.5
+    kp_yaw:               1.0
+    cruise_speed:         0.6
+    waypoint_radius:      0.8
+
+    # Trajectory: hold | waypoints | lawnmower | figure8 | circle
+    trajectory:        "lawnmower"
+    traj_scale:           6.0    # m
+    traj_depth:          -3.0    # m
+
+reference_generator:
+  ros__parameters:
+    pattern:           "constant"     # outer loop drives x_ref now;
+    rate_hz:               5.0        # the legacy generator just keeps
+    u0:                    0.0        # the topic alive at low rate
+    yaw_amplitude:         0.0
+    yaw_period_s:         60.0
+    heave_amp:             0.0
+    step_period_s:        40.0

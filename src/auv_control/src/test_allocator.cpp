@@ -1,0 +1,103 @@
+// ============================================================================
+//  auv_control/test_allocator.cpp
+//
+//  Off-line sanity check for the allocator + T-S fuzzy controller.
+//  No ROS graph needed: just runs three scenarios from the paper and prints
+//  key quantities so you can compare against Figures 5-11.
+//
+//  Scenario A : healthy          — should match "fuzzy input signal" (Fig 5)
+//  Scenario B : abrupt fault u1  — should match Figs 6-7 (pinv recovery)
+//  Scenario C : same fault + very tight limits — exercises the QP (Figs 10-11)
+// ============================================================================
+#include <array>
+#include <iomanip>
+#include <iostream>
+
+#include "auv_control/auv_params.hpp"
+#include "auv_control/ts_fuzzy.hpp"
+#include "auv_control/thrust_allocator.hpp"
+
+using namespace auv_control;
+
+static void print_vec(const char * label, const Eigen::VectorXd & v) {
+  std::cout << std::setw(16) << std::left << label;
+  std::cout << std::fixed << std::setprecision(3);
+  for (int i = 0; i < v.size(); ++i) std::cout << std::setw(8) << v(i);
+  std::cout << "\n";
+}
+
+static void run(const std::string & title,
+                const std::array<double, 4> & faults,
+                double u_min, double u_max) {
+  std::cout << "\n==== " << title << " ====\n";
+
+  VehicleParams    veh;   (void)veh;
+  AllocParams      geom;
+  ThrustAllocator  alloc(geom);
+  TSFuzzyController fuzzy;
+
+  alloc.set_fault_factors(faults);
+
+  // Operating point: cruising at 0.8 m/s surge, +0.05 rad/s yaw rate.
+  StateVec x;      x     << 0.8, 0.0, 0.0, 0.0, 0.05;
+  StateVec x_ref;  x_ref << 0.8, 0.0, 0.0, 0.0, 0.00;   // command "stop turning"
+
+  const ControlVec u_virt   = fuzzy.compute(x, x_ref);
+  const WrenchVec  tau_des  = alloc.B() * u_virt;
+
+  int status = 0;
+  const ControlVec u_cmd    = alloc.allocate(tau_des, u_min, u_max, &status);
+  const WrenchVec  tau_act  = alloc.actual_wrench(u_cmd);
+
+  print_vec("fault factors", Eigen::Map<const Eigen::Vector4d>(faults.data()));
+  print_vec("u_virtual",     u_virt);
+  print_vec("tau_des",       tau_des);
+  print_vec("u_cmd (alloc)", u_cmd);
+  print_vec("tau_actual",    tau_act);
+  std::cout << "status = " << status
+            << "   (0=pinv, 1=QP OK, 2=QP best-effort)\n"
+            << "report : " << alloc.last_report() << "\n";
+  std::cout << "tau error norm = "
+            << (tau_des - tau_act).norm() << "\n";
+}
+
+int main() {
+  //                      u1   u2   u3   u4
+  run("A  Healthy",      {1.0, 1.0, 1.0, 1.0}, -50.0, 50.0);
+  run("B  Abrupt u1 loss (f1=0)",
+                         {0.0, 1.0, 1.0, 1.0}, -50.0, 50.0);
+  run("C  Same fault, tight bounds (hits QP)",
+                         {0.0, 1.0, 1.0, 1.0}, -20.0, 20.0);
+  run("D  Partial u3 loss (f3=0.3)",
+                         {1.0, 1.0, 0.3, 1.0}, -50.0, 50.0);
+
+  // --- Aggressive manoeuvre designed to saturate actuator bounds. ---
+  // Use a large reference error so the T-S fuzzy controller commands high
+  // virtual u; then tighten the bounds so the QP MUST intervene.
+  std::cout << "\n==== E  Aggressive manoeuvre, bounds force QP ====\n";
+  {
+    AllocParams      geom;
+    ThrustAllocator  alloc(geom);
+    TSFuzzyController fuzzy;
+    alloc.set_fault_factors({0.0, 1.0, 1.0, 1.0});    // u1 dead
+
+    StateVec x;      x     << 0.5, 0.0, 0.0, 0.0, 0.20;
+    StateVec x_ref;  x_ref << 1.0, 0.0, 0.5, 0.0, 0.00;    // big surge/heave/yaw demand
+
+    const auto u_virt  = fuzzy.compute(x, x_ref);
+    const auto tau_des = alloc.B() * u_virt;
+    int status = 0;
+    const auto u_cmd   = alloc.allocate(tau_des, -5.0, 5.0, &status);   // tight bounds
+    const auto tau_act = alloc.actual_wrench(u_cmd);
+
+    print_vec("u_virtual",     u_virt);
+    print_vec("tau_des",       tau_des);
+    print_vec("u_cmd (alloc)", u_cmd);
+    print_vec("tau_actual",    tau_act);
+    std::cout << "status = " << status << "   "
+              << alloc.last_report() << "\n"
+              << "tau error norm = "
+              << (tau_des - tau_act).norm() << "\n";
+  }
+  return 0;
+}

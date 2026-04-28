@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>auv_bringup</name>
+  <version>0.1.0</version>
+  <description>Top-level launch files that combine Gazebo simulation and the
+    fault-tolerant control stack into a single command.</description>
+  <maintainer email="user@example.com">AUV FTC Maintainer</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>auv_description</exec_depend>
+  <exec_depend>auv_gazebo</exec_depend>
+  <exec_depend>auv_control</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

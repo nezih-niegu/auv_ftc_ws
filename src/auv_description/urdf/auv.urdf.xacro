@@ -1,0 +1,197 @@
+<?xml version="1.0"?>
+<!--
+  Torpedo-shaped AUV matching the propulsion system layout described in
+  Zhang et al., Sensors 2024, 24, 3029 (Figure 3).
+
+  Actuator mapping (paper convention):
+    u1 := horizontal thruster pair (surge)      links: thruster_u1
+    u2 := vertical thruster pair (heave)        links: thruster_u2
+    u3 := horizontal rudder pair (pitch moment) links: rudder_u3
+    u4 := vertical rudder pair (yaw moment)     links: rudder_u4
+
+  Forces/moments are applied to base_link as a single body-frame wrench by the
+  auv_controller node (computed from the allocated thruster commands through
+  the configuration matrix B). Individual thruster links are visualization only.
+-->
+<robot name="auv" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- ====================  Geometry / mass parameters  ==================== -->
+  <xacro:property name="hull_length"  value="1.20"/>
+  <xacro:property name="hull_radius"  value="0.12"/>
+  <xacro:property name="hull_mass"    value="22.0"/>
+
+  <xacro:property name="thr_length"   value="0.08"/>
+  <xacro:property name="thr_radius"   value="0.035"/>
+  <xacro:property name="thr_mass"     value="0.4"/>
+
+  <!-- Thruster lateral offset "l" and rudder half-arm for moment generation.
+       Used only for visual placement; the real moment arms live in
+       auv_control (configuration matrix B). -->
+  <xacro:property name="thr_offset_y" value="0.10"/>
+  <xacro:property name="thr_offset_z" value="0.08"/>
+  <xacro:property name="rud_offset_x" value="-0.50"/>
+
+  <!-- ====================  Materials  ==================== -->
+  <material name="hull_yellow">
+    <color rgba="0.95 0.75 0.15 1.0"/>
+  </material>
+  <material name="thr_dark">
+    <color rgba="0.15 0.15 0.15 1.0"/>
+  </material>
+  <material name="rud_red">
+    <color rgba="0.8 0.15 0.15 1.0"/>
+  </material>
+
+  <!-- ====================  Macros  ==================== -->
+  <xacro:macro name="cylinder_inertia" params="m r l">
+    <inertia
+      ixx="${m*(3*r*r + l*l)/12}" ixy="0" ixz="0"
+      iyy="${m*(3*r*r + l*l)/12}" iyz="0"
+      izz="${m*r*r/2}"/>
+  </xacro:macro>
+
+  <xacro:macro name="thruster" params="name xyz rpy color">
+    <link name="${name}">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 ${pi/2} 0"/>
+        <geometry>
+          <cylinder length="${thr_length}" radius="${thr_radius}"/>
+        </geometry>
+        <material name="${color}"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 ${pi/2} 0"/>
+        <geometry>
+          <cylinder length="${thr_length}" radius="${thr_radius}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="${thr_mass}"/>
+        <xacro:cylinder_inertia m="${thr_mass}" r="${thr_radius}" l="${thr_length}"/>
+      </inertial>
+    </link>
+    <joint name="${name}_joint" type="fixed">
+      <parent link="base_link"/>
+      <child  link="${name}"/>
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- ====================  Base link  ====================
+       Note on the harmless "root link has inertia" warning from KDL:
+       robot_state_publisher uses KDL which cannot handle inertia on the
+       root link. We deliberately DO NOT work around this by adding a
+       zero-inertia base_footprint parent, because Gazebo's URDF->SDF
+       converter collapses fixed joints between non-kinematic chains and
+       would rename base_link to base_footprint in the SDF, breaking the
+       gazebo_ros_force / gazebo_ros_p3d plugins below which refer to
+       base_link by name. The KDL warning is cosmetic only. -->
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 ${pi/2} 0"/>
+      <geometry>
+        <cylinder length="${hull_length}" radius="${hull_radius}"/>
+      </geometry>
+      <material name="hull_yellow"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 ${pi/2} 0"/>
+      <geometry>
+        <cylinder length="${hull_length}" radius="${hull_radius}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="${hull_mass}"/>
+      <xacro:cylinder_inertia m="${hull_mass}" r="${hull_radius}" l="${hull_length}"/>
+    </inertial>
+  </link>
+
+  <!-- Rounded nose cone (cosmetic) -->
+  <link name="nose">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 ${pi/2} 0"/>
+      <geometry>
+        <sphere radius="${hull_radius}"/>
+      </geometry>
+      <material name="hull_yellow"/>
+    </visual>
+    <inertial>
+      <mass value="0.01"/>
+      <inertia ixx="1e-5" iyy="1e-5" izz="1e-5" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+  <joint name="nose_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="nose"/>
+    <origin xyz="${hull_length/2} 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ====================  Thrusters (u1: horizontal surge pair)  ==================== -->
+  <xacro:thruster name="thruster_u1_port"
+                  xyz="${-hull_length/2 - thr_length/2}  ${ thr_offset_y} 0"
+                  rpy="0 0 0" color="thr_dark"/>
+  <xacro:thruster name="thruster_u1_stbd"
+                  xyz="${-hull_length/2 - thr_length/2}  ${-thr_offset_y} 0"
+                  rpy="0 0 0" color="thr_dark"/>
+
+  <!-- u2: vertical heave pair (tunnel thrusters, small offset in z) -->
+  <xacro:thruster name="thruster_u2_top"
+                  xyz="${-hull_length/2 - thr_length/2} 0  ${ thr_offset_z}"
+                  rpy="0 ${pi/2} 0" color="thr_dark"/>
+  <xacro:thruster name="thruster_u2_bot"
+                  xyz="${-hull_length/2 - thr_length/2} 0  ${-thr_offset_z}"
+                  rpy="0 ${pi/2} 0" color="thr_dark"/>
+
+  <!-- u3: horizontal rudder pair (pitch authority — ports top/bottom of tail) -->
+  <xacro:thruster name="rudder_u3_top"
+                  xyz="${rud_offset_x} 0  ${ hull_radius}"
+                  rpy="0 0 ${pi/2}" color="rud_red"/>
+  <xacro:thruster name="rudder_u3_bot"
+                  xyz="${rud_offset_x} 0  ${-hull_radius}"
+                  rpy="0 0 ${pi/2}" color="rud_red"/>
+
+  <!-- u4: vertical rudder pair (yaw authority — ports on sides of tail) -->
+  <xacro:thruster name="rudder_u4_port"
+                  xyz="${rud_offset_x}  ${ hull_radius} 0"
+                  rpy="${pi/2} 0 0" color="rud_red"/>
+  <xacro:thruster name="rudder_u4_stbd"
+                  xyz="${rud_offset_x}  ${-hull_radius} 0"
+                  rpy="${pi/2} 0 0" color="rud_red"/>
+
+  <!-- ====================  Gazebo plugins  ==================== -->
+  <!-- Body wrench applied by auv_controller. Topic: /auv/wrench  -->
+  <gazebo>
+    <plugin name="gazebo_ros_force_body" filename="libgazebo_ros_force.so">
+      <ros>
+        <namespace>/auv</namespace>
+        <remapping>gazebo_ros_force:=wrench</remapping>
+      </ros>
+      <link_name>base_link</link_name>
+      <force_frame>link</force_frame>
+    </plugin>
+  </gazebo>
+
+  <!-- Ground-truth odometry (pose + twist) so the controller has x(t) -->
+  <gazebo>
+    <plugin name="p3d_base_link" filename="libgazebo_ros_p3d.so">
+      <ros>
+        <namespace>/auv</namespace>
+        <remapping>odom:=odom</remapping>
+      </ros>
+      <body_name>base_link</body_name>
+      <frame_name>world</frame_name>
+      <update_rate>50.0</update_rate>
+      <gaussian_noise>0.0</gaussian_noise>
+    </plugin>
+  </gazebo>
+
+  <!-- Hull material for Gazebo -->
+  <gazebo reference="base_link">
+    <material>Gazebo/Yellow</material>
+  </gazebo>
+  <gazebo reference="nose">
+    <material>Gazebo/Yellow</material>
+  </gazebo>
+
+</robot>

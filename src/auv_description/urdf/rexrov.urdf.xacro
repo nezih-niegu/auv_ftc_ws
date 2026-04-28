@@ -1,0 +1,163 @@
+<?xml version="1.0"?>
+<!--
+  RexROV vehicle body compatible with our fault-tolerant control stack.
+
+  Differences vs. the original sub_descriptions RexROV:
+    * Uses the same plugin topology as auv.urdf.xacro
+      (libgazebo_ros_force on base_link + libgazebo_ros_p3d for odometry),
+      so the existing auv_controller_node works unchanged.
+    * Does NOT depend on the UUV Simulator stack
+      (uuv_descriptions / uuv_sensor_ros_plugins / uuv_gazebo_ros_plugins).
+    * Uses the lightweight STL mesh (15 kB) from the uploaded package
+      instead of the 14 MB Collada mesh.
+    * Mass/inertia are taken from the original RexROV xacro
+      (Berg 2012, NTNU SF 30k), scaled proportionally to match a plausible
+      4-thruster propulsion system.
+
+  This lets you demonstrate the T-S fuzzy + pseudo-inverse + QP pipeline on
+  a visually richer ROV body without pulling in the full UUV stack.
+-->
+<robot name="auv" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- ==================== Parameters ==================== -->
+  <!-- Mass and inertia from Berg 2012 / Dukan 2014 (SF 30k / RexROV). -->
+  <xacro:property name="mass" value="1862.87"/>
+  <xacro:property name="ixx"  value="525.39"/>
+  <xacro:property name="iyy"  value="794.20"/>
+  <xacro:property name="izz"  value="691.23"/>
+
+  <!-- Mesh files.
+       Using  package://auv_description/meshes/...  which is the canonical
+       ROS URI form and is resolved correctly by both robot_state_publisher
+       and the URDF->SDF conversion in gazebo_ros's spawn_entity.py in
+       Humble.  The GAZEBO_MODEL_PATH export in the gazebo.launch.py
+       provides a second resolution path, so even if sdformat rewrites the
+       URI to model:// form the mesh is still found. -->
+  <xacro:property name="visual_mesh"
+     value="package://auv_description/meshes/RexROV_no_props.stl"/>
+  <xacro:property name="prop_mesh"
+     value="package://auv_description/meshes/prop.dae"/>
+
+  <!-- Thruster positions / moment arms — RexROV is a larger ROV than the
+       small torpedo, so we extend the geometric arms. -->
+  <xacro:property name="thr_offset_x" value="-1.10"/>
+  <xacro:property name="thr_offset_y" value="0.70"/>
+  <xacro:property name="thr_offset_z" value="0.25"/>
+
+  <!-- ==================== Materials ==================== -->
+  <material name="hull_yellow">
+    <color rgba="0.95 0.75 0.15 1.0"/>
+  </material>
+  <material name="thr_dark">
+    <color rgba="0.15 0.15 0.15 1.0"/>
+  </material>
+
+  <!-- ==================== Base ====================
+       Note: we intentionally do NOT add a base_footprint dummy root link,
+       even though robot_state_publisher's KDL library warns about the
+       root link having inertia. Adding a fixed-joint dummy parent causes
+       Gazebo's URDF->SDF converter to collapse "base_link" into the
+       dummy, breaking the gazebo_ros_force and p3d plugins below which
+       reference "base_link" by name. The KDL warning is cosmetic. -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="${visual_mesh}" scale="1 1 1"/>
+      </geometry>
+      <material name="hull_yellow"/>
+    </visual>
+
+    <!-- Simplified collision boxes (from original RexROV xacro). -->
+    <collision>
+      <origin xyz="0 0 -0.75" rpy="0 0 0"/>
+      <geometry><box size="2.56 1.50 0.10"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0  0.60" rpy="0 0 0"/>
+      <geometry><box size="2.56 1.50 0.40"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="-0.20  0.70 -0.15" rpy="0 0 0"/>
+      <geometry><box size="2.20 0.10 1.10"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="-0.20 -0.70 -0.15" rpy="0 0 0"/>
+      <geometry><box size="2.20 0.10 1.10"/></geometry>
+    </collision>
+
+    <inertial>
+      <mass value="${mass}"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="${ixx}" ixy="1.44" ixz="33.41"
+               iyy="${iyy}" iyz="2.6"
+               izz="${izz}"/>
+    </inertial>
+  </link>
+
+  <!-- ==================== Macros ==================== -->
+  <xacro:macro name="prop" params="name xyz rpy">
+    <link name="${name}">
+      <visual>
+        <origin xyz="0 0 0" rpy="${rpy}"/>
+        <geometry>
+          <mesh filename="${prop_mesh}" scale="1 1 1"/>
+        </geometry>
+      </visual>
+      <inertial>
+        <mass value="0.5"/>
+        <inertia ixx="1e-3" iyy="1e-3" izz="1e-3" ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+    </link>
+    <joint name="${name}_joint" type="fixed">
+      <parent link="base_link"/>
+      <child  link="${name}"/>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- Propellers / thrusters — four channels matching our control model:
+       u1 (surge, x-force)   : port + starboard aft horizontal props
+       u2 (heave, z-force)   : top + bottom vertical tunnel props
+       u3 (pitch moment)     : two props vertically offset
+       u4 (yaw moment)       : two props laterally offset                -->
+  <xacro:prop name="thruster_u1_port"
+    xyz="${thr_offset_x}  ${ thr_offset_y} -0.10" rpy="0 0 0"/>
+  <xacro:prop name="thruster_u1_stbd"
+    xyz="${thr_offset_x}  ${-thr_offset_y} -0.10" rpy="0 0 0"/>
+
+  <xacro:prop name="thruster_u2_top"
+    xyz="${thr_offset_x + 0.2}  0.0  ${ thr_offset_z + 0.30}" rpy="0 1.5708 0"/>
+  <xacro:prop name="thruster_u2_bot"
+    xyz="${thr_offset_x + 0.2}  0.0  ${-thr_offset_z - 0.30}" rpy="0 1.5708 0"/>
+
+  <!-- ==================== Gazebo plugins ==================== -->
+  <gazebo>
+    <plugin name="gazebo_ros_force_body" filename="libgazebo_ros_force.so">
+      <ros>
+        <namespace>/auv</namespace>
+        <remapping>gazebo_ros_force:=wrench</remapping>
+      </ros>
+      <link_name>base_link</link_name>
+      <force_frame>link</force_frame>
+    </plugin>
+  </gazebo>
+
+  <gazebo>
+    <plugin name="p3d_base_link" filename="libgazebo_ros_p3d.so">
+      <ros>
+        <namespace>/auv</namespace>
+        <remapping>odom:=odom</remapping>
+      </ros>
+      <body_name>base_link</body_name>
+      <frame_name>world</frame_name>
+      <update_rate>50.0</update_rate>
+      <gaussian_noise>0.0</gaussian_noise>
+    </plugin>
+  </gazebo>
+
+  <gazebo reference="base_link">
+    <material>Gazebo/Yellow</material>
+  </gazebo>
+
+</robot>

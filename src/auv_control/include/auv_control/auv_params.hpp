@@ -1,0 +1,97 @@
+// ============================================================================
+//  auv_control/auv_params.hpp
+//
+//  Physical / geometric parameters for the AUV and the thrust-allocation
+//  configuration matrix B (Eq. 26 of Zhang et al., Sensors 24, 3029).
+//
+//  Control layout:
+//      u = [u1 u2 u3 u4]^T   (four actuator channels)
+//      tau = [tau_x tau_y tau_z tau_m tau_n]^T  (body-frame wrench)
+//      tau = B * u
+//
+//      with B (5x4):
+//
+//          | l*cos(alpha)   cos(alpha)   cos(beta)    cos(beta)  |
+//          | sin(alpha)     cos(alpha)   0            0          |
+//          | 0              0            cos(beta)    sin(beta)  |
+//          | A              A            A            A          |
+//          | B_arm          B_arm        B_arm        B_arm      |
+//
+//      where A = (b/2)*sin(alpha) + (a/2)*cos(alpha)
+//            B_arm = (b/2)*cos(beta) + (a/2)*sin(beta).
+//
+//  The paper leaves alpha, beta, a, b, l as geometric constants of the
+//  propulsion system. We pick values consistent with a small torpedo AUV.
+// ============================================================================
+#ifndef AUV_CONTROL__AUV_PARAMS_HPP_
+#define AUV_CONTROL__AUV_PARAMS_HPP_
+
+#include <Eigen/Dense>
+
+namespace auv_control {
+
+// ---- Shared small-vector types (used by every block) ----------------------
+using StateVec   = Eigen::Matrix<double, 5, 1>;   // [u v w q r]
+using ControlVec = Eigen::Matrix<double, 4, 1>;   // [u1 u2 u3 u4]
+using WrenchVec  = Eigen::Matrix<double, 5, 1>;   // [tau_x tau_y tau_z tau_m tau_n]
+
+// ---- Vehicle mass / buoyancy parameters ------------------------------------
+// Matches the URDF in auv_description (~22 kg hull + ~3.2 kg thrusters).
+struct VehicleParams {
+  double mass            = 25.0;    // kg
+  double buoyancy_force  = 25.0 * 9.81 * 1.01;  // slightly positive buoyancy, N
+  double gravity         = 9.81;    // m/s^2
+
+  // Linear drag (diagonal) coefficients Xu, Yv, Zw, Mq, Nr in body frame.
+  // Chosen so the AUV reaches ~1.5 m/s cruising with ~50 N surge thrust.
+  double drag_u = 25.0;
+  double drag_v = 60.0;
+  double drag_w = 60.0;
+  double drag_p = 5.0;
+  double drag_q = 15.0;
+  double drag_r = 15.0;
+
+  // Quadratic drag (|v|*v terms)
+  double drag_uu = 10.0;
+  double drag_vv = 40.0;
+  double drag_ww = 40.0;
+  double drag_qq = 4.0;
+  double drag_rr = 4.0;
+
+  // Maximum thruster output (N) — used as saturation limit in QP.
+  double thrust_max = 50.0;
+  double thrust_min = -50.0;
+
+  // Max norm per channel for virtual u (N before allocation scaling).
+  // Matches the "Amplitude 1..2" range used in the paper's figures.
+  double u_scale = 25.0;
+};
+
+// ---- Thrust-allocation geometry --------------------------------------------
+struct AllocParams {
+  double alpha = 0.35;   // rad, half-angle of horizontal thruster splay
+  double beta  = 0.35;   // rad, half-angle of vertical thruster splay
+  double a     = 0.10;   // m, lateral arm
+  double b     = 0.10;   // m, vertical arm
+  double l     = 1.00;   // dimensionless scale on tau_x (paper uses symbol "l")
+};
+
+// Build the 5x4 configuration matrix B from the geometric parameters.
+inline Eigen::Matrix<double, 5, 4> build_B(const AllocParams & g) {
+  const double ca = std::cos(g.alpha), sa = std::sin(g.alpha);
+  const double cb = std::cos(g.beta),  sb = std::sin(g.beta);
+  const double A  = 0.5 * g.b * sa + 0.5 * g.a * ca;
+  const double Ba = 0.5 * g.b * cb + 0.5 * g.a * sb;
+
+  Eigen::Matrix<double, 5, 4> B;
+  B << g.l * ca,  ca,      cb,      cb,
+       sa,        ca,      0.0,     0.0,
+       0.0,       0.0,     cb,      sb,
+       A,         A,       A,       A,
+       Ba,        Ba,      Ba,      Ba;
+  return B;
+}
+
+}  // namespace auv_control
+
+#endif  // AUV_CONTROL__AUV_PARAMS_HPP_

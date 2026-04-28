@@ -1,0 +1,23 @@
+# Starter topic list for rqt_plot to reproduce the paper's plots.
+# Use:
+#   ros2 run rqt_plot rqt_plot $(cat plot_topics.txt | tr '\n' ' ')
+#
+# /auv/virtual_u    [u1 u2 u3 u4]         ~  Paper Fig 5   "Input signal for fuzzy controller"
+# /auv/tau_des      [tx ty tz tm tn]      ~  Desired wrench
+# /auv/tau_actual   [tx ty tz tm tn]      ~  Fig 6/7  (compare with tau_des under fault)
+# /auv/fault_status [f1 f2 f3 f4]         ~  Live view of injected fault(s)
+
+/auv/virtual_u/data[0]
+/auv/virtual_u/data[1]
+/auv/virtual_u/data[2]
+/auv/virtual_u/data[3]
+
+/auv/tau_des/data[0]
+/auv/tau_actual/data[0]
+/auv/tau_des/data[4]
+/auv/tau_actual/data[4]
+
+/auv/fault_status/data[0]
+/auv/fault_status/data[1]
+/auv/fault_status/data[2]
+/auv/fault_status/data[3]

@@ -1,0 +1,12 @@
+# Inject an actuator fault into the live simulation.
+# thruster_id: 1..4 (paper's u1..u4)
+# fault_factor: 0.0 = total loss, 1.0 = fully healthy
+# fault_type: "abrupt" | "slow" (slow = linear ramp over 'ramp_seconds')
+# ramp_seconds: time to interpolate from healthy to fault_factor (ignored if abrupt)
+int32    thruster_id
+float64  fault_factor
+string   fault_type
+float64  ramp_seconds
+---
+bool     accepted
+string   message

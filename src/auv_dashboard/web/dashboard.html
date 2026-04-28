@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>AUV FTC — Live Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <script src="https://cdn.jsdelivr.net/npm/roslib@1.3.0/build/roslib.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:#0d1117; --panel:#161b22; --panel2:#1f2730;
+      --ink:#e6edf3; --muted:#8b949e; --accent:#58a6ff;
+      --ok:#3fb950; --warn:#d29922; --err:#f85149; --grid:#30363d;
+    }
+    *{box-sizing:border-box;}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;}
+    header{padding:14px 22px;border-bottom:1px solid var(--grid);
+      display:flex;align-items:center;gap:16px;flex-wrap:wrap;background:var(--panel);}
+    header h1{font-size:16px;font-weight:600;margin:0;letter-spacing:.2px;}
+    header .sub{color:var(--muted);font-size:12px;}
+    .status-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;
+      border-radius:999px;font-size:12px;background:var(--panel2);
+      border:1px solid var(--grid);}
+    .status-pill .dot{width:8px;height:8px;border-radius:50%;background:var(--err);
+      box-shadow:0 0 8px currentColor;}
+    .status-pill.ok .dot{background:var(--ok);}
+    .status-pill.warn .dot{background:var(--warn);}
+    .wrap{display:grid;gap:16px;padding:16px;grid-template-columns:repeat(12,1fr);}
+    .card{background:var(--panel);border:1px solid var(--grid);border-radius:10px;
+      padding:14px 16px;min-height:180px;display:flex;flex-direction:column;}
+    .card h2{margin:0 0 10px 0;font-size:13px;font-weight:600;color:var(--muted);
+      text-transform:uppercase;letter-spacing:.6px;}
+    .card .chart-wrap{position:relative;flex:1;min-height:170px;}
+    .span-12{grid-column:span 12;}
+    .span-8{grid-column:span 12;} @media(min-width:1100px){.span-8{grid-column:span 8;}}
+    .span-6{grid-column:span 12;} @media(min-width:900px) {.span-6{grid-column:span 6;}}
+    .span-4{grid-column:span 12;} @media(min-width:1100px){.span-4{grid-column:span 4;}}
+
+    .fault-row{display:grid;gap:10px;grid-template-columns:repeat(4,1fr);}
+    .thruster{background:var(--panel2);border:1px solid var(--grid);
+      border-radius:8px;padding:10px 12px;}
+    .thruster .label{font-size:11px;color:var(--muted);text-transform:uppercase;}
+    .thruster .value{font-size:22px;font-weight:600;margin-top:2px;}
+    .thruster .bar{height:6px;border-radius:3px;margin-top:8px;background:var(--panel);overflow:hidden;}
+    .thruster .bar > span{display:block;height:100%;
+      background:linear-gradient(90deg,var(--err),var(--warn) 40%,var(--ok) 70%);
+      transition:width .25s ease;}
+    .thruster button{margin-top:8px;width:100%;padding:5px 8px;font-size:11px;
+      border:1px solid var(--grid);background:var(--panel);color:var(--ink);
+      border-radius:6px;cursor:pointer;}
+    .thruster button:hover{background:var(--panel2);}
+    .thruster.failed{border-color:var(--err);}
+    .thruster.degraded{border-color:var(--warn);}
+
+    .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    .toolbar input[type="text"]{background:var(--panel2);color:var(--ink);
+      border:1px solid var(--grid);border-radius:6px;padding:4px 8px;
+      font-family:inherit;font-size:12px;width:220px;}
+    .toolbar button{background:var(--accent);color:#fff;border:0;border-radius:6px;
+      padding:5px 12px;font-size:12px;cursor:pointer;}
+    .toolbar button.ghost{background:transparent;color:var(--ink);border:1px solid var(--grid);}
+
+    .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12px;}
+    .kv .k{color:var(--muted);} .kv .v{color:var(--ink);font-variant-numeric:tabular-nums;}
+
+    .footer{padding:10px 20px;color:var(--muted);font-size:11px;border-top:1px solid var(--grid);}
+
+    /* Trajectory panel */
+    .traj-wrap{position:relative;flex:1;min-height:340px;background:#0a0d12;
+      border-radius:8px;border:1px solid var(--grid);overflow:hidden;}
+    .traj-wrap canvas{display:block;width:100%;height:100%;}
+    .traj-legend{display:flex;gap:14px;font-size:11px;color:var(--muted);
+      margin-top:6px;flex-wrap:wrap;}
+    .traj-legend span{display:inline-flex;align-items:center;gap:6px;}
+    .traj-legend .sw{display:inline-block;width:18px;height:3px;border-radius:2px;}
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>AUV Fault-Tolerant Control</h1>
+  <span class="sub">T-S Fuzzy &middot; Pseudo-inverse &middot; QP &middot; Cascade tracking</span>
+  <span id="conn-pill" class="status-pill"><span class="dot"></span><span id="conn-text">connecting...</span></span>
+  <div class="toolbar" style="margin-left:auto">
+    <input id="ws-url" type="text" value="ws://localhost:9090"/>
+    <button id="connect-btn">Reconnect</button>
+    <button id="pause-btn" class="ghost">Pause</button>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ==== Trajectory + path (top-down XY view) ==== -->
+  <section class="card span-8">
+    <h2>Trajectory  <span style="color:var(--muted);font-weight:400;text-transform:none;"> &mdash; top-down XY view</span></h2>
+    <div class="traj-wrap"><canvas id="canvas-traj"></canvas></div>
+    <div class="traj-legend">
+      <span><span class="sw" style="background:#3fb950"></span>commanded trajectory</span>
+      <span><span class="sw" style="background:#58a6ff"></span>actual path</span>
+      <span><span class="sw" style="background:#d29922;border-radius:50%"></span>current target</span>
+      <span><span class="sw" style="background:#f85149;border-radius:50%"></span>vehicle</span>
+    </div>
+  </section>
+
+  <!-- ==== State & target readout ==== -->
+  <section class="card span-4">
+    <h2>State x(t) &amp; target</h2>
+    <div class="kv" style="margin-bottom:10px">
+      <span class="k">pos (x, y)</span> <span class="v" id="s-xy">—</span>
+      <span class="k">depth (m)</span> <span class="v" id="s-z">—</span>
+      <span class="k">heading (rad)</span> <span class="v" id="s-yaw">—</span>
+      <span class="k">u (surge)</span> <span class="v" id="s-u">—</span>
+      <span class="k">w (heave)</span> <span class="v" id="s-w">—</span>
+      <span class="k">r (yaw rate)</span> <span class="v" id="s-r">—</span>
+    </div>
+    <h2 style="margin-top:6px">Target</h2>
+    <div class="kv">
+      <span class="k">target (x, y)</span> <span class="v" id="t-xy">—</span>
+      <span class="k">target depth</span> <span class="v" id="t-z">—</span>
+      <span class="k">range</span>        <span class="v" id="t-range">—</span>
+    </div>
+  </section>
+
+  <!-- ==== Actuator commands ==== -->
+  <section class="card span-6">
+    <h2>Actuator commands  <span style="color:var(--muted);font-weight:400;text-transform:none;">  /auv/virtual_u</span></h2>
+    <div class="chart-wrap"><canvas id="chart-u"></canvas></div>
+  </section>
+
+  <!-- ==== Fault factors ==== -->
+  <section class="card span-6">
+    <h2>Fault factors  <span style="color:var(--muted);font-weight:400;text-transform:none;">  /auv/fault_status</span></h2>
+    <div class="fault-row">
+      <div class="thruster" id="thr-1">
+        <div class="label">u1 (surge)</div><div class="value" id="f-1">1.00</div>
+        <div class="bar"><span id="b-1" style="width:100%"></span></div>
+        <button data-id="1" class="btn-fail">Fail</button>
+      </div>
+      <div class="thruster" id="thr-2">
+        <div class="label">u2 (heave)</div><div class="value" id="f-2">1.00</div>
+        <div class="bar"><span id="b-2" style="width:100%"></span></div>
+        <button data-id="2" class="btn-fail">Fail</button>
+      </div>
+      <div class="thruster" id="thr-3">
+        <div class="label">u3 (pitch)</div><div class="value" id="f-3">1.00</div>
+        <div class="bar"><span id="b-3" style="width:100%"></span></div>
+        <button data-id="3" class="btn-fail">Fail</button>
+      </div>
+      <div class="thruster" id="thr-4">
+        <div class="label">u4 (yaw)</div><div class="value" id="f-4">1.00</div>
+        <div class="bar"><span id="b-4" style="width:100%"></span></div>
+        <button data-id="4" class="btn-fail">Fail</button>
+      </div>
+    </div>
+    <div class="toolbar" style="margin-top:10px">
+      <button id="heal-all" class="ghost">Heal all</button>
+      <span style="color:var(--muted);font-size:11px">Click Fail to inject an abrupt fault.</span>
+    </div>
+  </section>
+
+  <!-- ==== Wrench tracking ==== -->
+  <section class="card span-6">
+    <h2>Surge force  &tau;<sub>x</sub></h2>
+    <div class="chart-wrap"><canvas id="chart-taux"></canvas></div>
+  </section>
+  <section class="card span-6">
+    <h2>Yaw moment  &tau;<sub>n</sub></h2>
+    <div class="chart-wrap"><canvas id="chart-taun"></canvas></div>
+  </section>
+
+  <!-- ==== Depth profile ==== -->
+  <section class="card span-12">
+    <h2>Depth vs time</h2>
+    <div class="chart-wrap" style="min-height:120px"><canvas id="chart-z"></canvas></div>
+  </section>
+
+</div>
+
+<div class="footer">
+  Reading topics on <code id="foot-url">ws://localhost:9090</code>.
+  Start rosbridge with <code>ros2 launch auv_dashboard dashboard.launch.py</code>
+  and open <code>auv_dashboard/web/dashboard.html</code> in a browser.
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+//  Charts
+// ---------------------------------------------------------------------------
+const MAX_POINTS = 600;
+function makeChart(id, datasets, yLabel) {
+  const ctx = document.getElementById(id).getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: {labels: [], datasets: datasets},
+    options: {
+      animation:false, responsive:true, maintainAspectRatio:false, parsing:false,
+      scales: {
+        x:{type:'linear',title:{display:true,text:'t [s]',color:'#8b949e'},
+           grid:{color:'#30363d'},ticks:{color:'#8b949e',maxTicksLimit:6}},
+        y:{title:{display:true,text:yLabel,color:'#8b949e'},
+           grid:{color:'#30363d'},ticks:{color:'#8b949e'}}
+      },
+      plugins:{legend:{labels:{color:'#e6edf3',boxWidth:14}}},
+      elements:{point:{radius:0},line:{borderWidth:1.5,tension:0.2}}
+    }
+  });
+}
+const COL=['#58a6ff','#3fb950','#d29922','#f85149'];
+const chartU = makeChart('chart-u',[
+  {label:'u1',data:[],borderColor:COL[0]},
+  {label:'u2',data:[],borderColor:COL[1]},
+  {label:'u3',data:[],borderColor:COL[2]},
+  {label:'u4',data:[],borderColor:COL[3]},
+],'amplitude');
+const chartTauX = makeChart('chart-taux',[
+  {label:'desired',data:[],borderColor:'#58a6ff'},
+  {label:'actual', data:[],borderColor:'#f85149',borderDash:[6,4]},
+],'τ_x [N]');
+const chartTauN = makeChart('chart-taun',[
+  {label:'desired',data:[],borderColor:'#58a6ff'},
+  {label:'actual', data:[],borderColor:'#f85149',borderDash:[6,4]},
+],'τ_n [N·m]');
+const chartZ = makeChart('chart-z',[
+  {label:'depth',  data:[],borderColor:'#58a6ff'},
+  {label:'target', data:[],borderColor:'#3fb950',borderDash:[4,4]},
+],'z [m]');
+
+function push(chart, t, values){
+  chart.data.datasets.forEach((ds,i)=>{
+    if(values[i]===undefined) return;
+    ds.data.push({x:t, y:values[i]});
+    if(ds.data.length>MAX_POINTS) ds.data.shift();
+  });
+}
+
+// ---------------------------------------------------------------------------
+//  Trajectory canvas (top-down XY view)
+// ---------------------------------------------------------------------------
+const trajCanvas = document.getElementById('canvas-traj');
+const trajCtx    = trajCanvas.getContext('2d');
+let plannedTraj  = [];   // [{x,y}]
+let actualPath   = [];   // [{x,y}]
+let currentPos   = null; // {x,y,yaw}
+let currentTarget= null; // {x,y}
+
+function resizeTrajCanvas(){
+  const r = trajCanvas.parentElement.getBoundingClientRect();
+  trajCanvas.width  = r.width  * devicePixelRatio;
+  trajCanvas.height = r.height * devicePixelRatio;
+  trajCanvas.style.width  = r.width  + 'px';
+  trajCanvas.style.height = r.height + 'px';
+}
+window.addEventListener('resize', resizeTrajCanvas);
+
+function drawTraj(){
+  resizeTrajCanvas();
+  const W = trajCanvas.width, H = trajCanvas.height;
+  trajCtx.clearRect(0,0,W,H);
+
+  // Compute bounds from planned + actual + vehicle.
+  const all = plannedTraj.concat(actualPath);
+  if (currentPos) all.push(currentPos);
+  if (currentTarget) all.push(currentTarget);
+  if (all.length === 0) return;
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  for (const p of all){
+    if(p.x<minX) minX=p.x; if(p.x>maxX) maxX=p.x;
+    if(p.y<minY) minY=p.y; if(p.y>maxY) maxY=p.y;
+  }
+  const padX = Math.max(1.0, (maxX-minX)*0.15);
+  const padY = Math.max(1.0, (maxY-minY)*0.15);
+  minX-=padX; maxX+=padX; minY-=padY; maxY+=padY;
+  const sx = W/(maxX-minX), sy = H/(maxY-minY);
+  const s  = Math.min(sx, sy);
+  const offX = (W - s*(maxX-minX))/2 - s*minX;
+  const offY = (H - s*(maxY-minY))/2 + s*maxY;
+  // World->canvas:  cx = world.x*s + offX,  cy = -world.y*s + offY
+  const tx = x => x*s + offX;
+  const ty = y => -y*s + offY;
+
+  // ---- Grid
+  trajCtx.strokeStyle = 'rgba(255,255,255,0.05)';
+  trajCtx.lineWidth = 1;
+  const gridStep = niceGrid(maxX-minX, 6);
+  for(let gx=Math.floor(minX/gridStep)*gridStep; gx<=maxX; gx+=gridStep){
+    trajCtx.beginPath();
+    trajCtx.moveTo(tx(gx),0); trajCtx.lineTo(tx(gx),H); trajCtx.stroke();
+  }
+  for(let gy=Math.floor(minY/gridStep)*gridStep; gy<=maxY; gy+=gridStep){
+    trajCtx.beginPath();
+    trajCtx.moveTo(0,ty(gy)); trajCtx.lineTo(W,ty(gy)); trajCtx.stroke();
+  }
+  // axes labels
+  trajCtx.fillStyle = '#8b949e';
+  trajCtx.font = (11*devicePixelRatio)+'px sans-serif';
+  trajCtx.fillText('+x (north)', W-90*devicePixelRatio, ty(0)-6*devicePixelRatio);
+  trajCtx.fillText('+y (east)',  tx(0)+6*devicePixelRatio, 16*devicePixelRatio);
+
+  // ---- Planned trajectory (closed loop)
+  if (plannedTraj.length>1){
+    trajCtx.strokeStyle = '#3fb950';
+    trajCtx.lineWidth = 2*devicePixelRatio;
+    trajCtx.beginPath();
+    plannedTraj.forEach((p,i)=>{
+      const X=tx(p.x), Y=ty(p.y);
+      if(i===0) trajCtx.moveTo(X,Y); else trajCtx.lineTo(X,Y);
+    });
+    trajCtx.stroke();
+    // Dots at each waypoint
+    trajCtx.fillStyle = 'rgba(63,185,80,0.5)';
+    plannedTraj.forEach(p=>{
+      trajCtx.beginPath();
+      trajCtx.arc(tx(p.x),ty(p.y),3*devicePixelRatio,0,Math.PI*2);
+      trajCtx.fill();
+    });
+  }
+
+  // ---- Actual path
+  if (actualPath.length>1){
+    trajCtx.strokeStyle = '#58a6ff';
+    trajCtx.lineWidth = 2*devicePixelRatio;
+    trajCtx.beginPath();
+    actualPath.forEach((p,i)=>{
+      const X=tx(p.x), Y=ty(p.y);
+      if(i===0) trajCtx.moveTo(X,Y); else trajCtx.lineTo(X,Y);
+    });
+    trajCtx.stroke();
+  }
+
+  // ---- Current target
+  if (currentTarget){
+    trajCtx.strokeStyle = '#d29922';
+    trajCtx.fillStyle   = 'rgba(210,153,34,0.25)';
+    trajCtx.lineWidth = 2*devicePixelRatio;
+    trajCtx.beginPath();
+    trajCtx.arc(tx(currentTarget.x),ty(currentTarget.y),
+                10*devicePixelRatio,0,Math.PI*2);
+    trajCtx.fill(); trajCtx.stroke();
+  }
+
+  // ---- Vehicle (red triangle pointing along yaw)
+  if (currentPos){
+    const X=tx(currentPos.x), Y=ty(currentPos.y);
+    const yaw = currentPos.yaw || 0;
+    const size = 10*devicePixelRatio;
+    trajCtx.save();
+    trajCtx.translate(X,Y);
+    // Canvas y is flipped relative to world y. Yaw points along +x in world,
+    // so on the canvas we rotate by -yaw to keep visual alignment.
+    trajCtx.rotate(-yaw);
+    trajCtx.fillStyle = '#f85149';
+    trajCtx.strokeStyle = '#fff';
+    trajCtx.lineWidth = 1.5*devicePixelRatio;
+    trajCtx.beginPath();
+    trajCtx.moveTo( size, 0);
+    trajCtx.lineTo(-size*0.6,  size*0.6);
+    trajCtx.lineTo(-size*0.3,  0);
+    trajCtx.lineTo(-size*0.6, -size*0.6);
+    trajCtx.closePath();
+    trajCtx.fill(); trajCtx.stroke();
+    trajCtx.restore();
+  }
+}
+function niceGrid(span, divisions){
+  if (span<=0) return 1;
+  const raw = span/divisions;
+  const exp = Math.pow(10, Math.floor(Math.log10(raw)));
+  const f = raw/exp;
+  return (f<2 ? 1 : f<5 ? 2 : 5)*exp;
+}
+setInterval(drawTraj, 200);
+
+// ---------------------------------------------------------------------------
+//  ROS connection
+// ---------------------------------------------------------------------------
+let ros=null, subs=[], connected=false, paused=false;
+let t0=null, msgCount=0, lastRateT=performance.now();
+function setConn(state, text){
+  const pill=document.getElementById('conn-pill');
+  const txt=document.getElementById('conn-text');
+  pill.classList.remove('ok','warn');
+  if(state==='ok') pill.classList.add('ok');
+  if(state==='warn') pill.classList.add('warn');
+  txt.textContent = text;
+}
+function now_s(){
+  if(t0===null) t0 = performance.now()/1000;
+  return performance.now()/1000 - t0;
+}
+function subscribe(name, type, handler){
+  const s = new ROSLIB.Topic({ros, name, messageType:type, throttle_rate:50});
+  s.subscribe(m => { if(!paused) handler(m); });
+  subs.push(s);
+}
+function connect(url){
+  if(ros){ subs.forEach(s=>s.unsubscribe()); subs=[]; ros.close(); }
+  setConn(null,'connecting...');
+  ros = new ROSLIB.Ros({url});
+  ros.on('connection',()=>{connected=true; setConn('ok','connected'); t0=null; setupSubs();});
+  ros.on('error',(e)=>{connected=false; setConn('warn','error — is rosbridge running?');});
+  ros.on('close',()=>{connected=false; setConn(null,'disconnected');});
+  document.getElementById('foot-url').textContent = url;
+}
+
+function setupSubs(){
+  subscribe('/auv/virtual_u','std_msgs/msg/Float64MultiArray',m=>{
+    const t=now_s(); push(chartU,t,m.data); chartU.update('none'); msgCount++;
+  });
+  let lastTauDes = null;
+  subscribe('/auv/tau_des','std_msgs/msg/Float64MultiArray',m=>{
+    lastTauDes = m.data;
+    const t=now_s();
+    push(chartTauX,t,[m.data[0],null]);
+    push(chartTauN,t,[m.data[4],null]);
+  });
+  subscribe('/auv/tau_actual','std_msgs/msg/Float64MultiArray',m=>{
+    const t=now_s();
+    push(chartTauX,t,[null,m.data[0]]);
+    push(chartTauN,t,[null,m.data[4]]);
+    chartTauX.update('none'); chartTauN.update('none');
+  });
+  subscribe('/auv/fault_status','std_msgs/msg/Float64MultiArray',m=>{
+    for(let i=0;i<4;i++){
+      const f=m.data[i];
+      document.getElementById('f-'+(i+1)).textContent=f.toFixed(2);
+      document.getElementById('b-'+(i+1)).style.width=(f*100).toFixed(0)+'%';
+      const el=document.getElementById('thr-'+(i+1));
+      el.classList.remove('failed','degraded');
+      if(f<=0.05) el.classList.add('failed');
+      else if(f<0.95) el.classList.add('degraded');
+    }
+  });
+
+  // Vehicle odometry — drive readouts, vehicle marker, depth chart.
+  subscribe('/auv/odom','nav_msgs/msg/Odometry',m=>{
+    const tw=m.twist.twist, po=m.pose.pose;
+    const yaw = quatYaw(po.orientation);
+    currentPos = {x:po.position.x, y:po.position.y, yaw};
+    document.getElementById('s-xy').textContent =
+      `(${po.position.x.toFixed(2)}, ${po.position.y.toFixed(2)})`;
+    document.getElementById('s-z').textContent  = (-po.position.z).toFixed(2);
+    document.getElementById('s-yaw').textContent= yaw.toFixed(3);
+    document.getElementById('s-u').textContent  = tw.linear.x.toFixed(3);
+    document.getElementById('s-w').textContent  = tw.linear.z.toFixed(3);
+    document.getElementById('s-r').textContent  = tw.angular.z.toFixed(3);
+    push(chartZ, now_s(), [po.position.z, currentTarget?currentTarget.z:null]);
+    chartZ.update('none');
+  });
+
+  subscribe('/auv/target_pose','geometry_msgs/msg/PoseStamped',m=>{
+    currentTarget = {x:m.pose.position.x, y:m.pose.position.y, z:m.pose.position.z};
+    document.getElementById('t-xy').textContent =
+      `(${m.pose.position.x.toFixed(2)}, ${m.pose.position.y.toFixed(2)})`;
+    document.getElementById('t-z').textContent  = (-m.pose.position.z).toFixed(2);
+    if (currentPos){
+      const dx = currentTarget.x - currentPos.x;
+      const dy = currentTarget.y - currentPos.y;
+      document.getElementById('t-range').textContent =
+        Math.hypot(dx,dy).toFixed(2);
+    }
+  });
+
+  // Planned trajectory: latched topic — rosbridge replays the last message.
+  subscribe('/auv/trajectory','nav_msgs/msg/Path',m=>{
+    plannedTraj = m.poses.map(p=>({x:p.pose.position.x, y:p.pose.position.y}));
+  });
+
+  // Recent path trail.
+  subscribe('/auv/path','nav_msgs/msg/Path',m=>{
+    actualPath = m.poses.map(p=>({x:p.pose.position.x, y:p.pose.position.y}));
+  });
+}
+
+function quatYaw(q){
+  // ZYX yaw extraction.
+  const t3 = 2*(q.w*q.z + q.x*q.y);
+  const t4 = 1 - 2*(q.y*q.y + q.z*q.z);
+  return Math.atan2(t3, t4);
+}
+
+// ---------------------------------------------------------------------------
+//  Service: inject_fault
+// ---------------------------------------------------------------------------
+function callInjectFault(id, factor, type, ramp){
+  if(!ros || !connected) return;
+  const svc = new ROSLIB.Service({
+    ros, name:'/auv/inject_fault',
+    serviceType:'auv_control/srv/InjectFault'
+  });
+  const req = new ROSLIB.ServiceRequest({
+    thruster_id:id, fault_factor:factor,
+    fault_type:type, ramp_seconds:ramp
+  });
+  svc.callService(req, (rsp)=>console.log('inject_fault:',rsp),
+    (err)=>console.warn('inject_fault failed:',err));
+}
+document.querySelectorAll('.btn-fail').forEach(b=>{
+  b.addEventListener('click',()=>{
+    callInjectFault(parseInt(b.dataset.id,10), 0.0, 'abrupt', 0.0);
+  });
+});
+document.getElementById('heal-all').addEventListener('click',()=>{
+  for(let i=1;i<=4;i++) callInjectFault(i, 1.0, 'abrupt', 0.0);
+});
+
+document.getElementById('connect-btn').addEventListener('click',()=>{
+  connect(document.getElementById('ws-url').value.trim());
+});
+document.getElementById('pause-btn').addEventListener('click',(e)=>{
+  paused = !paused;
+  e.target.textContent = paused ? 'Resume' : 'Pause';
+});
+
+connect(document.getElementById('ws-url').value.trim());
+</script>
+</body>
+</html>
